@@ -1,15 +1,17 @@
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, QMessageBox,
-                             QLabel, QVBoxLayout, QWidget, QToolBar, QMenu, QSlider, QHBoxLayout, QPushButton, QInputDialog)
-from PyQt5.QtGui import QPixmap, QImage, QCursor, QPen, QPainter, QColor
-from PyQt5.QtCore import Qt, QTimer, QPointF
-import sys
 import os
+import sys
+
 import cv2
-import torch
 import numpy as np
-import pandas as pd
 import openpyxl
+import pandas as pd
+from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtGui import QPixmap, QImage, QCursor, QPen, QPainter, QColor
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, QMessageBox,
+                             QLabel, QVBoxLayout, QWidget, QToolBar, QSlider, QHBoxLayout, QPushButton, QInputDialog)
 from ultralytics import YOLO
+import supervision as sv  # Importar la biblioteca Supervision
+
 
 class VideoProcessor:
     def __init__(self):
@@ -21,9 +23,15 @@ class VideoProcessor:
         self.roi_points = []
         self.fps = 30  # Valor por defecto
 
+        # Inicializar herramientas de supervisión
+        self.tracker = sv.ByteTrack()  # Inicializar el rastreador ByteTrack
+        self.box_annotator = sv.BoxAnnotator()  # Inicializar el anotador de cajas
+        self.label_annotator = sv.LabelAnnotator()  # Inicializar el anotador de etiquetas
+        self.trace_annotator = sv.TraceAnnotator()  # Inicializar el anotador de trazas
+
     def load_model(self):
         try:
-            self.model = YOLO('yolov10x.pt')
+            self.model = YOLO('yolov8n.pt')
             print("Modelo cargado exitosamente.")
         except Exception as e:
             print(f"Error al cargar el modelo: {e}")
@@ -52,21 +60,7 @@ class VideoProcessor:
         if self.model is None:
             raise ValueError("El modelo no está cargado.")
         results = self.model(frame)
-
-        # Convert results to pandas DataFrame
-        detections = results[0].boxes.data.cpu().numpy()
-        df = pd.DataFrame(detections, columns=['xmin', 'ymin', 'xmax', 'ymax', 'confidence', 'class'])
-
-        # Map class IDs to class names if needed (YOLOv8 might use class IDs)
-        df['name'] = df['class'].apply(lambda x: self.model.names[int(x)])
-
-        # Filter detections based on ROI if ROI points are defined
-        if self.roi_points:
-            roi_polygon = np.array(
-                [(point.x() * frame.shape[1], point.y() * frame.shape[0]) for point in self.roi_points])
-            df = df[df.apply(lambda row: self.is_within_roi(row, roi_polygon), axis=1)]
-
-        return df
+        return results
 
     def is_within_roi(self, row, roi_polygon):
         bbox_center = ((row['xmin'] + row['xmax']) / 2, (row['ymin'] + row['ymax']) / 2)
@@ -76,16 +70,44 @@ class VideoProcessor:
         self.excel_path = file_path
         self.workbook = openpyxl.Workbook()
         self.worksheet = self.workbook.active
-        self.worksheet.append(["Frame", "xmin", "ymin", "xmax", "ymax", "confidence", "name"])
+        self.worksheet.append(["Frame", "Confidence", "Name", "Time"])
+        self.workbook.save(self.excel_path)
+
+    def initialize_excel(self, file_path):
+        self.excel_path = file_path
+        self.workbook = openpyxl.Workbook()
+        self.worksheet = self.workbook.active
+        self.worksheet.append(["Name", "Confidence", "Time"])
         self.workbook.save(self.excel_path)
 
     def update_excel(self, frame_number, detections):
         if self.worksheet is None:
             return
+        time_in_seconds = frame_number / self.fps  # Calculate the time in seconds
+        hours, remainder = divmod(time_in_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_str = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+
         for _, row in detections.iterrows():
-            self.worksheet.append([frame_number, row['xmin'], row['ymin'], row['xmax'], row['ymax'], row['confidence'], row['name']])
+            # Only append the 'name', 'confidence', and 'time' to the worksheet
+            self.worksheet.append([row['name'], row['confidence'], time_str])
         self.workbook.save(self.excel_path)
 
+    def annotate_frame(self, frame, detections):
+        # Convert detections to Supervision format
+        sv_detections = sv.Detections.from_pandas(detections)
+        sv_detections = self.tracker.update_with_detections(sv_detections)
+
+        # Create labels with unique tracker IDs and class names
+        labels = [
+            f"#{tracker_id} {self.model.names[class_id]}"
+            for class_id, tracker_id in zip(sv_detections.class_id, sv_detections.tracker_id)
+        ]
+
+        # Annotate the frame with bounding boxes, labels, and traces
+        annotated_frame = self.box_annotator.annotate(frame.copy(), detections=sv_detections)
+        annotated_frame = self.label_annotator.annotate(annotated_frame, detections=sv_detections, labels=labels)
+        return self.trace_annotator.annotate(annotated_frame, detections=sv_detections)
 
 
 class DrawingLabel(QLabel):
@@ -202,25 +224,21 @@ class DrawingLabel(QLabel):
         if self.drawing_roi:
             self.setFocus()
 
-
-
-
-
 class App(QMainWindow):
     def __init__(self):
-        super().__init__()
-        self.title = 'Detección de Vehículos'
-        self.processor = VideoProcessor()
-        self.frame = None
-        self.original_frame = None
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.next_frame)
-        self.detections = []
-        self.frame_number = 0
-        self.initUI()
-        self.video_files = []
-        self.current_video_index = 0
-        self.playback_speed = 1.0
+            super().__init__()
+            self.title = 'Detección de Vehículos'
+            self.processor = VideoProcessor()
+            self.frame = None
+            self.original_frame = None
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.next_frame)
+            self.detections = []
+            self.frame_number = 0
+            self.initUI()
+            self.video_files = []
+            self.current_video_index = 0
+            self.playback_speed = 1.0
 
     def initUI(self):
         self.setWindowTitle(self.title)
@@ -292,14 +310,15 @@ class App(QMainWindow):
 
     def resizeEvent(self, event):
         if self.original_frame is not None:
-            self.display_frame(self.original_frame.copy(), pd.DataFrame())
+            self.display_frame(self.original_frame.copy(), [])
 
     def load_videos(self):
         if self.processor.model is None:
             QMessageBox.warning(self, "Advertencia", "El modelo no está cargado correctamente.")
             return
 
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Selecciona uno o más videos", "", "Video files (*.mp4; *.avi)")
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "Selecciona uno o más videos", "",
+                                                     "Video files (*.mp4; *.avi)")
         if file_paths:
             self.video_files = file_paths
             self.current_video_index = 0
@@ -330,17 +349,19 @@ class App(QMainWindow):
         else:
             QMessageBox.information(self, "Información", "Procesamiento de todos los videos completado.")
 
-
     def next_frame(self):
         frame = self.processor.read_frame()
         if frame is not None:
             self.frame_number += 1
             self.video_slider.setValue(self.frame_number)
-            detections = self.processor.detect_vehicles(frame)
-            self.detections.append(detections)
-            self.processor.update_excel(self.frame_number, detections)
+            results = self.processor.detect_vehicles(frame)
+            detections = results[0].boxes.data.cpu().numpy()
+            df = pd.DataFrame(detections, columns=['xmin', 'ymin', 'xmax', 'ymax', 'confidence', 'class'])
+            df['name'] = df['class'].apply(lambda x: self.processor.model.names[int(x)])
+            self.detections.append(df)
+            self.processor.update_excel(self.frame_number, df)
             self.original_frame = frame.copy()
-            self.display_frame(frame, detections)
+            self.display_frame(frame, results)
             self.update_time_label()
         else:
             self.timer.stop()
@@ -348,19 +369,25 @@ class App(QMainWindow):
             self.current_video_index += 1
             self.process_next_video()
 
-    def display_frame(self, frame, detections):
-        if not detections.empty and 'confidence' in detections.columns:
-            filtered_detections = detections[detections['confidence'] > 0.45]
-            for _, row in filtered_detections.iterrows():
-                xmin, ymin, xmax, ymax = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
-                label = row['name']
-                confidence = row['confidence']
+    def display_frame(self, frame, results):
+        if results:
+            # Convert results to Supervision format
+            sv_detections = sv.Detections.from_ultralytics(results[0])
+            sv_detections = self.processor.tracker.update_with_detections(sv_detections)
 
-                # Dibujar caja delimitadora
-                cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-                # Dibujar etiqueta y confianza
-                cv2.putText(frame, f'{label} {confidence:.2f}', (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                            (36, 255, 12), 2)
+            # Create labels with unique tracker IDs and class names
+            labels = [
+                f"#{tracker_id} {self.processor.model.names[class_id]}"
+                for class_id, tracker_id in zip(sv_detections.class_id, sv_detections.tracker_id)
+            ]
+
+            # Annotate the frame with bounding boxes, labels, and traces
+            annotated_frame = self.processor.box_annotator.annotate(frame.copy(), detections=sv_detections)
+            annotated_frame = self.processor.label_annotator.annotate(annotated_frame, detections=sv_detections,
+                                                                      labels=labels)
+            annotated_frame = self.processor.trace_annotator.annotate(annotated_frame, detections=sv_detections)
+
+            frame = annotated_frame
 
         height, width, channel = frame.shape
         bytes_per_line = 3 * width
@@ -381,8 +408,8 @@ class App(QMainWindow):
             self.update_time_label()
 
     def update_time_label(self):
-        current_time = int(self.frame_number / 30)  # Assuming 30 FPS
-        total_time = int(self.total_frames / 30)  # Assuming 30 FPS
+        current_time = int(self.frame_number / self.fps)  # Use the actual FPS
+        total_time = int(self.total_frames / self.fps)  # Use the actual FPS
         current_time_str = f"{current_time // 60:02d}:{current_time % 60:02d}"
         total_time_str = f"{total_time // 60:02d}:{total_time % 60:02d}"
         self.time_label.setText(f"{current_time_str} / {total_time_str}")
@@ -397,7 +424,7 @@ class App(QMainWindow):
             self.timer.stop()
             self.play_button.setText('>')
         else:
-            self.timer.start(int(1000 / (self.processor.fps * self.playback_speed)))  # Ajustar el temporizador usando la FPS
+            self.timer.start(int(1000 / (self.processor.fps * self.playback_speed)))  # Adjust timer using FPS
             self.play_button.setText('II')
 
     def save_detections(self):
@@ -407,8 +434,32 @@ class App(QMainWindow):
 
         file_path, _ = QFileDialog.getSaveFileName(self, "Guardar Detecciones", "", "Excel Files (*.xlsx)")
         if file_path:
-            all_detections = pd.concat(self.detections, ignore_index=True)
+            # Create a new DataFrame to store all detections
+            all_detections = pd.DataFrame(columns=['Name', 'Confidence', 'Time'])
+
+            # Iterate over each frame's detections
+            for frame_number, detections in enumerate(self.detections, start=1):
+                if detections.empty:
+                    continue  # Skip empty DataFrames
+
+                # Calculate the time in seconds
+                time_in_seconds = frame_number / self.fps
+                hours, remainder = divmod(time_in_seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                time_str = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+
+                # For each detection, keep only the name, confidence, and add the time
+                for _, row in detections.iterrows():
+                    df = pd.DataFrame({
+                        'Name': [row['name']],
+                        'Confidence': [row['confidence']],
+                        'Time': [time_str]
+                    })
+                    all_detections = pd.concat([all_detections, df], ignore_index=True)
+
+            # Write all detections to the Excel file
             all_detections.to_excel(file_path, index=False)
+
             QMessageBox.information(self, "Información", "Detecciones guardadas correctamente.")
         else:
             QMessageBox.warning(self, "Advertencia", "No se especificó un archivo para guardar.")

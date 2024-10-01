@@ -32,32 +32,16 @@ class VideoWindow(QMainWindow):
 
         self.tracker = sv.ByteTrack()  # Initialize the ByteTrack tracker from Supervision
         self.box_annotator = sv.BoxAnnotator()  # Initialize the box annotator
-        self.unique_id_counter = 0  # Initialize a counter for unique IDs
+        self.label_annotator = sv.LabelAnnotator()  # Initialize the label annotator
+        self.trace_annotator = sv.TraceAnnotator()  # Initialize the trace annotator
 
     def update_frame(self):
         ret, frame = self.cap.read()
         if ret:
-            results = self.model(frame)[0]  # Perform object detection
-            detections = sv.Detections.from_ultralytics(results)  # Convert detections
-            tracked_detections = self.tracker.update_with_detections(detections)  # Update tracker with detections
-
-            # Annotate the frame with the detections
-            annotated_frame = self.box_annotator.annotate(frame.copy(), detections=tracked_detections)
-
-            # Draw bounding boxes and assign unique IDs to each detection
-            for detection in tracked_detections:
-                bbox = detection[0]  # Bounding box coordinates
-                x1, y1, x2, y2 = map(int, bbox)
-
-                # Assign a unique ID
-                self.unique_id_counter += 1
-                unique_id = self.unique_id_counter
-
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(annotated_frame, f"ID: {unique_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+            frame = self.process_frame(frame)
 
             # Convert the image to RGB format for display
-            rgb_image = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
@@ -65,6 +49,22 @@ class VideoWindow(QMainWindow):
         else:
             self.cap.release()
             self.timer.stop()
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        results = self.model(frame)[0]
+        detections = sv.Detections.from_ultralytics(results)
+        detections = self.tracker.update_with_detections(detections)
+
+        # Create labels with unique tracker IDs and class names
+        labels = [
+            f"#{tracker_id} {results.names[class_id]}"
+            for class_id, tracker_id in zip(detections.class_id, detections.tracker_id)
+        ]
+
+        # Annotate the frame with bounding boxes, labels, and traces
+        annotated_frame = self.box_annotator.annotate(frame.copy(), detections=detections)
+        annotated_frame = self.label_annotator.annotate(annotated_frame, detections=detections, labels=labels)
+        return self.trace_annotator.annotate(annotated_frame, detections=detections)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

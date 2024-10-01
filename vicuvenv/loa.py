@@ -1,8 +1,9 @@
 import sys
+
 import cv2
-from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QWidget, QInputDialog
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
 from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen
+from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QWidget, QInputDialog
 
 
 class ImageLabel(QLabel):

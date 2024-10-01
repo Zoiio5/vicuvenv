@@ -1,7 +1,9 @@
-from PyQt5.QtWidgets import QWidget, QApplication, QInputDialog, QPushButton
-from PyQt5.QtGui import QPainter, QPen, QBrush
-from PyQt5.QtCore import Qt, QPoint
 import sys
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPainter, QPen, QBrush
+from PyQt5.QtWidgets import QWidget, QApplication, QInputDialog, QPushButton
+
 
 class Ventana(QWidget):
     def __init__(self):

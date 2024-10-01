@@ -1,16 +1,16 @@
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, QMessageBox,
-                             QLabel, QVBoxLayout, QWidget, QToolBar, QMenu, QSlider, QHBoxLayout, QPushButton,
-                             QInputDialog)
-from PyQt5.QtGui import QPixmap, QImage, QCursor, QPen, QPainter, QColor
-from PyQt5.QtCore import Qt, QTimer, QPointF
-import sys
 import os
+import sys
+
 import cv2
-import torch
 import numpy as np
-import pandas as pd
 import openpyxl
+import pandas as pd
+from PyQt5.QtCore import Qt, QTimer, QPointF
+from PyQt5.QtGui import QPen, QPainter, QColor
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, QMessageBox,
+                             QLabel, QVBoxLayout, QWidget, QToolBar, QSlider, QHBoxLayout, QPushButton)
 from ultralytics import YOLO
+
 
 class VideoProcessor:
     def __init__(self):

@@ -1,17 +1,17 @@
+import os
+import sys
+
+import cv2
+import openpyxl
+import pandas as pd
+import torch
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QPixmap, QImage, QCursor
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, QMessageBox,
                              QLabel, QVBoxLayout, QWidget, QToolBar, QMenu)
-from PyQt5.QtGui import QPixmap, QImage, QCursor
-from PyQt5.QtCore import Qt, QTimer
-import sys
-import os
-import cv2
-import torch
-import pandas as pd
-import openpyxl
-import numpy as np
-from ultralytics import YOLOv10
 from deep_sort_realtime.deepsort_tracker import DeepSort
-from collections import defaultdict
+from ultralytics import YOLOv10
+
 
 class VideoProcessor:
     def __init__(self):
